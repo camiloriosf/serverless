@@ -1,20 +1,96 @@
 service:
-  name: serverless-cloud-formation
+  name: serverless-resources
 
 # Add the serverless-webpack plugin
 plugins:
   - serverless-webpack
 
+custom:
+  stage: ${opt:stage, self:provider.stage}
+  tableThroughputs:
+    prod: 5
+    default: 1
+  tableThroughput: ${self:custom.tableThroughputs.${self:custom.stage}, self:custom.tableThroughputs.default}
+  webpack:
+    webpackConfig: ./webpack.config.js
+    includeModules: true
+  profiles:
+    dev: camilo
+
 provider:
   name: aws
-  runtime: nodejs6.10
+  runtime: nodejs8.10
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:stage, 'us-east-1'}
+  profile: ${self:custom.profiles.${self:provider.stage}, 'camilo'}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:DescribeTable
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource:
+        Fn::GetAtt: [ NotesTable, Arn ]
 
 functions:
-  first:
-    handler: first.hello
-  second:
-    handler: second.hello
+  test:
+    handler: functions/test.hello
+    memorySize: 512
+    description: Test function
     events:
-      - http:
-          method: get
-          path: second
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt:
+              - NotesTable
+              - StreamArn
+          batchSize: 1
+
+resources:
+  Resources:
+    NotesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:custom.stage}-notes
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: noteId
+            AttributeType: S
+          - AttributeName: someId
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: noteId
+            KeyType: RANGE
+        LocalSecondaryIndexes:
+        - IndexName: userId-createdAt-index
+          KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: createdAt
+            KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
+        GlobalSecondaryIndexes:
+        - IndexName: someId-index
+          KeySchema:
+          - AttributeName: someId
+            KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+          ProvisionedThroughput:
+            ReadCapacityUnits: ${self:custom.tableThroughput}
+            WriteCapacityUnits: ${self:custom.tableThroughput}
+        ProvisionedThroughput:
+          ReadCapacityUnits: ${self:custom.tableThroughput}
+          WriteCapacityUnits: ${self:custom.tableThroughput}
+        StreamSpecification:
+          StreamViewType: NEW_AND_OLD_IMAGES
